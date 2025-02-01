@@ -18,7 +18,8 @@ Clarinet.test({
                 types.ascii("TEST"),
                 types.utf8("ipfs://metadata"),
                 types.uint(5), // 5% royalty
-                types.uint(1000) // max supply
+                types.uint(1000), // max supply
+                types.uint(100000000) // floor price 100 STX
             ], wallet_1.address)
         ]);
         
@@ -38,74 +39,89 @@ Clarinet.test({
 });
 
 Clarinet.test({
-    name: "Can mint NFT from collection",
+    name: "Can mint and list NFT",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const wallet_1 = accounts.get('wallet_1')!;
         
-        // First create collection
+        // Create collection
         let block = chain.mineBlock([
             Tx.contractCall('safe-mint', 'create-collection', [
                 types.ascii("Test Collection"),
                 types.ascii("TEST"),
                 types.utf8("ipfs://metadata"),
                 types.uint(5),
-                types.uint(1000)
-            ], wallet_1.address)
-        ]);
-        
-        // Then mint token
-        let mintBlock = chain.mineBlock([
+                types.uint(1000),
+                types.uint(100000000)
+            ], wallet_1.address),
+            
+            // Mint token
             Tx.contractCall('safe-mint', 'mint', [
-                types.uint(1), // collection id
+                types.uint(1),
                 types.utf8("ipfs://token-metadata")
+            ], wallet_1.address),
+            
+            // List token
+            Tx.contractCall('safe-mint', 'list-token', [
+                types.uint(1),
+                types.uint(1),
+                types.uint(150000000)
             ], wallet_1.address)
         ]);
         
-        mintBlock.receipts[0].result.expectOk();
+        block.receipts[2].result.expectOk().expectBool(true);
         
-        // Verify token owner
-        let owner = chain.callReadOnlyFn(
+        // Verify listing
+        let tokenInfo = chain.callReadOnlyFn(
             'safe-mint',
-            'get-token-owner',
+            'get-token-info',
             [types.uint(1), types.uint(1)],
             wallet_1.address
         );
         
-        assertEquals(owner.result.expectPrincipal(), wallet_1.address);
+        let tokenData = tokenInfo.result.expectSome().expectTuple();
+        assertEquals(tokenData['listed'], true);
+        assertEquals(tokenData['price'], 150000000);
     }
 });
 
 Clarinet.test({
-    name: "Can transfer NFT",
+    name: "Can buy listed NFT with royalties",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const wallet_1 = accounts.get('wallet_1')!;
         const wallet_2 = accounts.get('wallet_2')!;
         
-        // Create collection and mint
+        // Setup collection and token
         let block = chain.mineBlock([
             Tx.contractCall('safe-mint', 'create-collection', [
                 types.ascii("Test Collection"),
                 types.ascii("TEST"),
                 types.utf8("ipfs://metadata"),
                 types.uint(5),
-                types.uint(1000)
+                types.uint(1000),
+                types.uint(100000000)
             ], wallet_1.address),
+            
             Tx.contractCall('safe-mint', 'mint', [
                 types.uint(1),
                 types.utf8("ipfs://token-metadata")
+            ], wallet_1.address),
+            
+            Tx.contractCall('safe-mint', 'list-token', [
+                types.uint(1),
+                types.uint(1),
+                types.uint(150000000)
             ], wallet_1.address)
         ]);
         
-        // Transfer token
-        let transferBlock = chain.mineBlock([
-            Tx.contractCall('safe-mint', 'transfer', [
-                types.uint(1), // collection id
-                types.uint(1), // token id
-                types.principal(wallet_2.address)
-            ], wallet_1.address)
+        // Buy token
+        let buyBlock = chain.mineBlock([
+            Tx.contractCall('safe-mint', 'buy-token', [
+                types.uint(1),
+                types.uint(1)
+            ], wallet_2.address)
         ]);
         
-        transferBlock.receipts[0].result.expectOk().expectBool(true);
+        buyBlock.receipts[0].result.expectOk().expectBool(true);
         
         // Verify new owner
         let owner = chain.callReadOnlyFn(
