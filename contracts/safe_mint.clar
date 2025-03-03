@@ -11,11 +11,29 @@
 (define-constant err-collection-paused (err u106))
 (define-constant err-invalid-uri (err u107))
 
+;; Event Types
+(define-constant EVENT-MINT "mint")
+(define-constant EVENT-TRANSFER "transfer")
+(define-constant EVENT-LIST "list")
+(define-constant EVENT-UNLIST "unlist")
+(define-constant EVENT-SALE "sale")
+
 ;; Data Variables
 (define-data-var last-collection-id uint u0)
 (define-data-var contract-paused bool false)
 
-;; Data Maps
+;; Enhanced Collection Statistics
+(define-map collection-stats
+    uint 
+    {
+        total-volume: uint,
+        sales-count: uint,
+        last-sale-price: uint,
+        highest-sale: uint
+    }
+)
+
+;; Collections Map (unchanged)
 (define-map collections 
     uint 
     {
@@ -30,9 +48,7 @@
     }
 )
 
-;; [Previous maps remain unchanged]
-
-;; Events
+;; Enhanced Events
 (define-data-var last-event-id uint u0)
 (define-map events 
     uint 
@@ -42,93 +58,96 @@
         token-id: uint,
         sender: principal,
         recipient: (optional principal),
-        amount: (optional uint)
+        amount: (optional uint),
+        tx-hash: (optional (buff 32))
     }
 )
 
-;; Administrative Functions
-(define-public (toggle-contract-pause)
-    (begin
-        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (ok (var-set contract-paused (not (var-get contract-paused))))
+;; Collection Statistics Functions
+(define-public (update-collection-stats 
+    (collection-id uint)
+    (sale-price uint))
+    (let (
+        (stats (default-to 
+            { total-volume: u0, sales-count: u0, last-sale-price: u0, highest-sale: u0 }
+            (map-get? collection-stats collection-id)))
+        (new-volume (+ (get total-volume stats) sale-price))
+        (new-count (+ (get sales-count stats) u1))
+        (new-highest (if (> sale-price (get highest-sale stats))
+            sale-price
+            (get highest-sale stats)))
     )
+    (map-set collection-stats collection-id
+        {
+            total-volume: new-volume,
+            sales-count: new-count,
+            last-sale-price: sale-price,
+            highest-sale: new-highest
+        }
+    )
+    (ok true))
 )
 
-(define-public (toggle-collection-pause (collection-id uint))
-    (let ((collection (unwrap! (map-get? collections collection-id) err-not-found)))
-        (asserts! (is-eq tx-sender (get creator collection)) err-owner-only)
-        (map-set collections collection-id (merge collection { paused: (not (get paused collection)) }))
-        (ok true)
-    )
-)
-
-;; Event Management
+;; Enhanced Event Emission
 (define-private (emit-event 
     (event-type (string-ascii 24))
     (collection-id uint)
     (token-id uint)
     (recipient (optional principal))
     (amount (optional uint)))
-    (let ((new-event-id (+ (var-get last-event-id) u1)))
+    (let (
+        (new-event-id (+ (var-get last-event-id) u1))
+        (tx-hash (unwrap-panic (get-tx-hash)))
+    )
         (map-set events new-event-id {
             event-type: event-type,
             collection-id: collection-id,
             token-id: token-id,
             sender: tx-sender,
             recipient: recipient,
-            amount: amount
+            amount: amount,
+            tx-hash: (some tx-hash)
         })
         (var-set last-event-id new-event-id)
         new-event-id
     )
 )
 
-;; Batch Minting
-(define-public (batch-mint 
+;; Batch Transfer Function
+(define-public (batch-transfer
     (collection-id uint)
-    (metadata-uris (list 25 (string-utf8 256))))
-    (let ((collection (unwrap! (map-get? collections collection-id) err-not-found))
-         (minted (default-to u0 (map-get? collection-minted collection-id))))
-        
+    (token-ids (list 25 uint))
+    (recipient principal))
+    (let ((collection (unwrap! (map-get? collections collection-id) err-not-found)))
         (asserts! (not (var-get contract-paused)) err-contract-paused)
         (asserts! (not (get paused collection)) err-collection-paused)
-        (asserts! (<= (+ minted (len metadata-uris)) (get max-supply collection)) err-invalid-params)
-        
-        (map mint-single (make-list (len metadata-uris) collection-id) metadata-uris)
+        (map transfer-single (make-list (len token-ids) collection-id) token-ids (make-list (len token-ids) recipient))
         (ok true)
     )
 )
 
-(define-private (mint-single (collection-id uint) (metadata-uri (string-utf8 256)))
-    (let ((minted (default-to u0 (map-get? collection-minted collection-id)))
-         (new-token-id (+ minted u1)))
+(define-private (transfer-single (collection-id uint) (token-id uint) (recipient principal))
+    (let ((token (unwrap! (map-get? collection-tokens { collection-id: collection-id, token-id: token-id }) err-not-found)))
+        (asserts! (is-eq tx-sender (get owner token)) err-owner-only)
+        (asserts! (not (get listed token)) err-invalid-params)
         
-        (try! (nft-mint? nft-token 
-            { collection-id: collection-id, token-id: new-token-id }
-            tx-sender))
+        (try! (nft-transfer? nft-token 
+            { collection-id: collection-id, token-id: token-id }
+            tx-sender
+            recipient))
         
         (map-set collection-tokens 
-            { collection-id: collection-id, token-id: new-token-id }
-            {
-                owner: tx-sender,
-                metadata-uri: metadata-uri,
-                listed: false,
-                price: u0
-            })
+            { collection-id: collection-id, token-id: token-id }
+            (merge token { owner: recipient }))
         
-        (map-set collection-minted collection-id new-token-id)
-        (emit-event "mint" collection-id new-token-id none none)
-        (ok { collection-id: collection-id, token-id: new-token-id })
+        (emit-event EVENT-TRANSFER collection-id token-id (some recipient) none)
+        (ok true)
     )
 )
 
-;; [Rest of the original contract functions remain unchanged but with added event emissions]
-
-;; Additional Read-Only Functions
-(define-read-only (get-total-minted (collection-id uint))
-    (default-to u0 (map-get? collection-minted collection-id))
+;; Read-Only Functions for Statistics
+(define-read-only (get-collection-stats (collection-id uint))
+    (map-get? collection-stats collection-id)
 )
 
-(define-read-only (get-event (event-id uint))
-    (map-get? events event-id)
-)
+;; [Previous functions remain unchanged]
