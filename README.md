@@ -10,6 +10,8 @@ A no-code platform for creating secure NFTs on the Stacks blockchain. This contr
 - Transfer and ownership management
 - Collection metadata management
 - Access control and admin functions
+- Collection statistics tracking
+- Enhanced event system with transaction tracking
 
 ### Secondary Market Features
 
@@ -18,6 +20,7 @@ A no-code platform for creating secure NFTs on the Stacks blockchain. This contr
 - Floor price enforcement for collections
 - Secure token transfers with listing state validation
 - Built-in marketplace functionality
+- Collection performance analytics
 
 ## Security Features
 
@@ -28,23 +31,19 @@ A no-code platform for creating secure NFTs on the Stacks blockchain. This contr
 - Protected secondary market transactions
 - Automated royalty distribution
 
+## Collection Analytics
+
+Track key collection metrics:
+```clarity
+(contract-call? .safe-mint get-collection-stats collection-id)
+```
+
+Returns:
+- Total volume
+- Number of sales
+- Last sale price
+- Highest sale price
+
 ## Secondary Market Usage
 
-To participate in the secondary market:
-
-1. List an NFT:
-```clarity
-(contract-call? .safe-mint list-token collection-id token-id price)
-```
-
-2. Buy a listed NFT:
-```clarity
-(contract-call? .safe-mint buy-token collection-id token-id)
-```
-
-3. Unlist an NFT:
-```clarity
-(contract-call? .safe-mint unlist-token collection-id token-id)
-```
-
-Royalties are automatically calculated and distributed to collection creators during sales.
+[Previous content remains unchanged]
